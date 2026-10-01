@@ -3,12 +3,12 @@ from pypdf import PdfReader
 from deep_translator import GoogleTranslator
 from gtts import gTTS
 from langdetect import detect
+import time
 import os
-import re
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -50,30 +50,15 @@ st.markdown("""
 <style>
 
 .main-title {
-    font-size: 42px;
+    font-size: 38px;
     font-weight: bold;
     text-align: center;
-    margin-bottom: 10px;
 }
 
 .subtitle {
     text-align: center;
     font-size: 18px;
-    margin-bottom: 30px;
-}
-
-.success-box {
-    padding: 15px;
-    border-radius: 10px;
-    background-color: #dff5e1;
-    margin-top: 15px;
-}
-
-.info-box {
-    padding: 15px;
-    border-radius: 10px;
-    background-color: #e8f4f8;
-    margin-top: 15px;
+    margin-bottom: 25px;
 }
 
 </style>
@@ -110,7 +95,7 @@ uploaded_file = st.file_uploader(
 
 
 # ============================================================
-# PROCESS PDF
+# MAIN PROCESS
 # ============================================================
 
 if uploaded_file is not None:
@@ -119,11 +104,11 @@ if uploaded_file is not None:
         f"Uploaded: {uploaded_file.name}"
     )
 
-    # --------------------------------------------------------
-    # READ PDF
-    # --------------------------------------------------------
-
     try:
+
+        # ----------------------------------------------------
+        # READ PDF
+        # ----------------------------------------------------
 
         reader = PdfReader(uploaded_file)
 
@@ -133,10 +118,10 @@ if uploaded_file is not None:
 
         for page in reader.pages:
 
-            page_text = page.extract_text()
+            text = page.extract_text()
 
-            if page_text:
-                extracted_text += page_text + "\n"
+            if text:
+                extracted_text += text + "\n"
 
         # ----------------------------------------------------
         # CHECK TEXT
@@ -145,8 +130,12 @@ if uploaded_file is not None:
         if not extracted_text.strip():
 
             st.error(
-                "❌ No text could be extracted from this PDF. "
-                "If it is a scanned PDF, OCR is required."
+                "❌ No text found in this PDF."
+            )
+
+            st.warning(
+                "If your PDF is scanned/image-based, "
+                "OCR is required."
             )
 
             st.stop()
@@ -161,7 +150,7 @@ if uploaded_file is not None:
                 extracted_text[:3000]
             )
 
-        except:
+        except Exception:
 
             detected_language = "unknown"
 
@@ -174,130 +163,223 @@ if uploaded_file is not None:
         )
 
         # ----------------------------------------------------
-        # LANGUAGE SELECTION
+        # LANGUAGE DROPDOWN
         # ----------------------------------------------------
 
         st.subheader("🌐 Select Audio Language")
 
         selected_language = st.selectbox(
-            "Choose the language in which you want to listen:",
+            "Choose the language:",
             list(LANGUAGES.keys())
         )
 
-        target_code = LANGUAGES[selected_language]
-
-        st.write(
-            f"Selected language: **{selected_language}**"
-        )
+        target_code = LANGUAGES[
+            selected_language
+        ]
 
         # ----------------------------------------------------
         # SHOW ORIGINAL TEXT
         # ----------------------------------------------------
 
-        with st.expander("📄 View extracted PDF text"):
+        with st.expander(
+            "📄 View Extracted PDF Text"
+        ):
 
             st.text_area(
-                "Original text",
+                "Original Text",
                 extracted_text,
                 height=250
             )
 
-        # ----------------------------------------------------
-        # TRANSLATE + AUDIO BUTTON
-        # ----------------------------------------------------
+        # ====================================================
+        # TRANSLATE BUTTON
+        # ====================================================
 
         if st.button(
             "🎧 Translate & Create Audiobook",
             use_container_width=True
         ):
 
-            # ================================================
-            # STEP 1 - TRANSLATION
-            # ================================================
+            # ------------------------------------------------
+            # TRANSLATION
+            # ------------------------------------------------
 
             with st.spinner(
-                f"Translating PDF to {selected_language}..."
+                f"Translating to {selected_language}..."
             ):
 
                 try:
 
-                    # Split text into smaller chunks
-                    # because translation services have limits.
+                    # If the selected language is already
+                    # the original language, no translation
+                    # request is required.
 
-                    chunks = []
-
-                    words = extracted_text.split()
-
-                    chunk_size = 400
-
-                    for i in range(
-                        0,
-                        len(words),
-                        chunk_size
+                    if (
+                        detected_language != "unknown"
+                        and
+                        detected_language == target_code
                     ):
 
-                        chunk = " ".join(
-                            words[i:i + chunk_size]
-                        )
+                        translated_text = extracted_text
 
-                        chunks.append(chunk)
+                    else:
 
-                    translated_chunks = []
+                        # ------------------------------------
+                        # CLEAN TEXT
+                        # ------------------------------------
 
-                    for chunk in chunks:
+                        lines = []
 
-                        if target_code == detected_language:
+                        for line in extracted_text.splitlines():
 
-                            translated = chunk
+                            line = line.strip()
 
-                        else:
+                            if line:
+                                lines.append(line)
 
-                            translator = GoogleTranslator(
-                                source="auto",
-                                target=target_code
+                        # ------------------------------------
+                        # CREATE LARGER CHUNKS
+                        # ------------------------------------
+
+                        chunks = []
+
+                        current_chunk = ""
+
+                        for line in lines:
+
+                            if len(
+                                current_chunk
+                            ) + len(line) < 2500:
+
+                                current_chunk += (
+                                    " " + line
+                                )
+
+                            else:
+
+                                if current_chunk.strip():
+                                    chunks.append(
+                                        current_chunk.strip()
+                                    )
+
+                                current_chunk = line
+
+                        if current_chunk.strip():
+
+                            chunks.append(
+                                current_chunk.strip()
                             )
 
-                            translated = translator.translate(
-                                chunk
-                            )
+                        # ------------------------------------
+                        # TRANSLATOR
+                        # ------------------------------------
 
-                        translated_chunks.append(
-                            translated
+                        translator = GoogleTranslator(
+                            source="auto",
+                            target=target_code
                         )
 
-                    translated_text = "\n".join(
-                        translated_chunks
-                    )
+                        translated_chunks = []
+
+                        # ------------------------------------
+                        # TRANSLATE WITH RETRY
+                        # ------------------------------------
+
+                        for i, chunk in enumerate(chunks):
+
+                            success = False
+
+                            for attempt in range(3):
+
+                                try:
+
+                                    translated = (
+                                        translator.translate(
+                                            chunk
+                                        )
+                                    )
+
+                                    translated_chunks.append(
+                                        translated
+                                    )
+
+                                    success = True
+
+                                    # Small delay to avoid
+                                    # rate limiting
+                                    time.sleep(1.2)
+
+                                    break
+
+                                except Exception as e:
+
+                                    if attempt < 2:
+
+                                        time.sleep(3)
+
+                                    else:
+
+                                        raise e
+
+                            if not success:
+
+                                raise Exception(
+                                    "Translation request failed."
+                                )
+
+                            st.write(
+                                f"Translation progress: "
+                                f"{i + 1}/{len(chunks)}"
+                            )
+
+                        translated_text = "\n".join(
+                            translated_chunks
+                        )
 
                 except Exception as e:
 
                     st.error(
-                        f"Translation error: {e}"
+                        "❌ Translation failed."
+                    )
+
+                    st.warning(
+                        "Google Translate is temporarily "
+                        "rate-limiting requests. "
+                        "Please wait 1–2 minutes and try again."
+                    )
+
+                    st.code(
+                        str(e)
                     )
 
                     st.stop()
 
+            # ------------------------------------------------
+            # TRANSLATION SUCCESS
+            # ------------------------------------------------
+
             st.success(
-                f"✅ Translation completed in {selected_language}"
+                f"✅ Translation completed in "
+                f"{selected_language}"
             )
 
-            # ================================================
+            # ------------------------------------------------
             # SHOW TRANSLATED TEXT
-            # ================================================
+            # ------------------------------------------------
 
             st.subheader(
                 f"📝 Translated Text - {selected_language}"
             )
 
             st.text_area(
-                "Translated text",
+                "Translated Text",
                 translated_text,
                 height=300
             )
 
-            # ================================================
-            # STEP 2 - TEXT TO SPEECH
-            # ================================================
+            # =================================================
+            # TEXT TO SPEECH
+            # =================================================
 
             with st.spinner(
                 f"Creating {selected_language} audiobook..."
@@ -305,29 +387,30 @@ if uploaded_file is not None:
 
                 try:
 
-                    # gTTS has a practical text-size limit,
-                    # so create multiple audio chunks.
+                    # ----------------------------------------
+                    # SPLIT TEXT FOR TTS
+                    # ----------------------------------------
 
-                    text_words = translated_text.split()
+                    words = translated_text.split()
 
                     audio_files = []
 
-                    audio_chunk_size = 300
+                    audio_chunk_size = 250
 
-                    for index in range(
+                    for i in range(
                         0,
-                        len(text_words),
+                        len(words),
                         audio_chunk_size
                     ):
 
                         audio_text = " ".join(
-                            text_words[
-                                index:index + audio_chunk_size
+                            words[
+                                i:i + audio_chunk_size
                             ]
                         )
 
                         audio_file = (
-                            f"/tmp/audio_{index}.mp3"
+                            f"/tmp/audio_{i}.mp3"
                         )
 
                         tts = gTTS(
@@ -344,9 +427,11 @@ if uploaded_file is not None:
                             audio_file
                         )
 
-                    # ========================================
-                    # MERGE AUDIO FILES
-                    # ========================================
+                        time.sleep(0.5)
+
+                    # ----------------------------------------
+                    # MERGE AUDIO
+                    # ----------------------------------------
 
                     final_audio = (
                         "/tmp/translated_audiobook.mp3"
@@ -371,49 +456,51 @@ if uploaded_file is not None:
                 except Exception as e:
 
                     st.error(
-                        f"Audio generation error: {e}"
+                        "❌ Audio generation failed."
+                    )
+
+                    st.code(
+                        str(e)
                     )
 
                     st.stop()
 
-            # ================================================
+            # =================================================
             # SUCCESS
-            # ================================================
+            # =================================================
 
-            st.markdown(
-                '<div class="success-box">'
-                '✅ Audiobook created successfully!'
-                '</div>',
-                unsafe_allow_html=True
+            st.success(
+                "✅ Audiobook created successfully!"
             )
 
-            st.write(
-                f"🌐 Audio language: **{selected_language}**"
+            st.info(
+                f"🌐 Audio language: "
+                f"{selected_language}"
             )
 
-            # ================================================
+            # ------------------------------------------------
             # AUDIO PLAYER
-            # ================================================
+            # ------------------------------------------------
 
             st.subheader(
-                "🎧 Listen to translated audiobook"
+                "🎧 Listen to Translated Audiobook"
             )
 
             with open(
                 final_audio,
                 "rb"
-            ) as audio_file:
+            ) as audio:
 
-                audio_bytes = audio_file.read()
+                audio_bytes = audio.read()
 
             st.audio(
                 audio_bytes,
                 format="audio/mp3"
             )
 
-            # ================================================
-            # DOWNLOAD AUDIO
-            # ================================================
+            # ------------------------------------------------
+            # DOWNLOAD
+            # ------------------------------------------------
 
             st.download_button(
                 label="⬇️ Download Audiobook",
@@ -428,5 +515,5 @@ if uploaded_file is not None:
     except Exception as e:
 
         st.error(
-            f"PDF processing error: {e}"
-)
+            f"❌ PDF processing error: {e}"
+        )
