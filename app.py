@@ -1,5 +1,3 @@
-%%writefile app.py
-
 import streamlit as st
 from pypdf import PdfReader
 from deep_translator import GoogleTranslator
